@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class BookResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -74,3 +74,36 @@ class UserBookResponse(BaseModel):
     status: str
     access_type: str
     current_page: int
+
+class ReviewCreate(BaseModel):
+    user_book_id: int
+    rating: float | None = Field(default=None, ge=0.5, le=5.0)
+    review_text: str | None = None
+
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, value):
+        if value is not None and value * 2 != int(value * 2):
+            raise ValueError("Rating must be in 0.5 increments")
+        return value
+
+
+class ReviewUpdate(BaseModel):
+    rating: float | None = Field(default=None, ge=0.5, le=5.0)
+    review_text: str | None = None
+
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, value):
+        if value is not None and value * 2 != int(value * 2):
+            raise ValueError("Rating must be in 0.5 increments")
+        return value
+
+
+class ReviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_book_id: int
+    rating: float | None
+    review_text: str | None

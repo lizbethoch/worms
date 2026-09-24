@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import engine
-from app.models import Book, User, UserBook
+from app.models import Book, Review, User, UserBook
 from app.schemas import (
     BookCreate,
     BookResponse,
@@ -17,6 +17,9 @@ from app.schemas import (
     UserBookUpdate,
     UserCreate,
     UserLogin,
+    ReviewCreate,
+    ReviewResponse,
+    ReviewUpdate,
 )
 from app.security import (
     create_access_token,
@@ -161,7 +164,26 @@ def update_user_book(
                 detail="Book not found",
             )
 
+        book_result = session.execute(
+            select(Book).where(Book.id == existing_user_book.book_id)
+        )
+
+        book = book_result.scalar_one_or_none()
+
+        if book is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Book not found",
+            )
+
         updates = user_book.model_dump(exclude_unset=True)
+
+        if "current_page" in updates:
+            if updates["current_page"] > book.page_count:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Current page cannot exceed the book's page count",
+                )
 
         for field, value in updates.items():
             setattr(existing_user_book, field, value)
@@ -310,3 +332,143 @@ def login(user: UserLogin):
                 "user_id": existing_user.id,
                 "username": existing_user.username,
         }
+
+@app.post("/reviews", response_model=ReviewResponse)
+def create_review(
+    review: ReviewCreate,
+    current_user: User = Depends(get_current_user),
+):
+    with Session(engine) as session:
+        result = session.execute(
+            select(UserBook).where(
+                UserBook.id == review.user_book_id,
+                UserBook.user_id == current_user.id,
+            )
+        )
+
+        user_book = result.scalar_one_or_none()
+
+        if user_book is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Book not found",
+            )
+
+        existing_review_result = session.execute(
+            select(Review).where(
+                Review.user_book_id == review.user_book_id
+            )
+        )
+
+        existing_review = existing_review_result.scalar_one_or_none()
+
+        if existing_review is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Review already exists for this book",
+            )
+
+        now = datetime.now(timezone.utc)
+
+        new_review = Review(
+            user_book_id=review.user_book_id,
+            rating=review.rating,
+            review_text=review.review_text,
+            created_at=now,
+            updated_at=now,
+        )
+
+        session.add(new_review)
+        session.commit()
+        session.refresh(new_review)
+
+        return new_review
+
+@app.get("/reviews/{review_id}", response_model=ReviewResponse)
+def get_review(
+    review_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    with Session(engine) as session:
+        result = session.execute(
+            select(Review)
+            .join(UserBook, Review.user_book_id == UserBook.id)
+            .where(
+                Review.id == review_id,
+                UserBook.user_id == current_user.id,
+            )
+        )
+
+        review = result.scalar_one_or_none()
+
+        if review is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Review not found",
+            )
+
+        return review
+
+@app.patch("/reviews/{review_id}", response_model=ReviewResponse)
+def update_review(
+    review_id: int,
+    review: ReviewUpdate,
+    current_user: User = Depends(get_current_user),
+):
+    with Session(engine) as session:
+        result = session.execute(
+            select(Review)
+            .join(UserBook, Review.user_book_id == UserBook.id)
+            .where(
+                Review.id == review_id,
+                UserBook.user_id == current_user.id,
+            )
+        )
+
+        existing_review = result.scalar_one_or_none()
+
+        if existing_review is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Review not found",
+            )
+
+        updates = review.model_dump(exclude_unset=True)
+
+        for field, value in updates.items():
+            setattr(existing_review, field, value)
+
+        existing_review.updated_at = datetime.now(timezone.utc)
+
+        session.commit()
+        session.refresh(existing_review)
+
+        return existing_review
+
+@app.delete("/reviews/{review_id}")
+def delete_review(
+    review_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    with Session(engine) as session:
+        result = session.execute(
+            select(Review)
+            .join(UserBook, Review.user_book_id == UserBook.id)
+            .where(
+                Review.id == review_id,
+                UserBook.user_id == current_user.id,
+            )
+        )
+
+        existing_review = result.scalar_one_or_none()
+
+        if existing_review is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Review not found",
+            )
+
+        session.delete(existing_review)
+        session.commit()
+
+        return {"detail": "Review deleted successfully"}
